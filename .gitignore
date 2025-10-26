@@ -9,3 +9,5 @@
 
 # Uploads
 uploads/
+node_/modules
+node_/modules/**/*
