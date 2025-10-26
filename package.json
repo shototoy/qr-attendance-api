@@ -4,14 +4,19 @@
   "type": "module",
   "scripts": {
     "setup": "node setup-db.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "install": "npm install --prefer-offline --no-audit --progress=false"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
-    "better-sqlite3": "^12.4.1",
+    "better-sqlite3": "^9.6.0",
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.2",
     "multer": "2.0.2"
+  },
+  "engines": {
+    "node": "18.x",
+    "npm": "10.x"
   }
 }
