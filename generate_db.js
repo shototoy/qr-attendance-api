@@ -1,9 +1,31 @@
 import Database from 'better-sqlite3';
 import bcrypt from 'bcrypt';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-console.log('🔧 Creating qr_attendance.db...\n');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const db = new Database('./qr_attendance.db');
+console.log('🔧 Setting up database...\n');
+
+const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH 
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'qr_attendance.db')
+  : './qr_attendance.db';
+
+const uploadsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'uploads', 'staff')
+  : path.join(__dirname, 'uploads', 'staff');
+
+console.log(`📁 Database path: ${dbPath}`);
+console.log(`📁 Uploads path: ${uploadsDir}`);
+
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('✅ Created uploads directory');
+}
+
+const db = new Database(dbPath);
 db.pragma('foreign_keys = ON');
 
 db.exec(`
@@ -20,7 +42,6 @@ db.exec(`
     photo TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
-
   CREATE TABLE IF NOT EXISTS attendance (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     staff_id TEXT NOT NULL,
@@ -32,13 +53,10 @@ db.exec(`
     FOREIGN KEY (staff_id) REFERENCES staff(id),
     UNIQUE (staff_id, date)
   );
-
   CREATE INDEX IF NOT EXISTS idx_attendance_staff_date 
   ON attendance(staff_id, date);
-  
   CREATE INDEX IF NOT EXISTS idx_attendance_check_in 
   ON attendance(check_in);
-
   CREATE INDEX IF NOT EXISTS idx_staff_username 
   ON staff(username);
 `);

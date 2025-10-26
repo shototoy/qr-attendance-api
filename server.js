@@ -10,8 +10,8 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 
 const app = express();
-const JWT_SECRET = 'qr-attendance-secret-2024';
-const PORT = 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'qr-attendance-secret-2024';
+const PORT = process.env.PORT || 3000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,14 +19,21 @@ const __dirname = path.dirname(__filename);
 app.use(cors());
 app.use(express.json());
 
-const uploadsDir = path.join(__dirname, 'uploads', 'staff');
+const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH 
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'qr_attendance.db')
+  : './qr_attendance.db';
+
+const uploadsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'uploads', 'staff')
+  : path.join(__dirname, 'uploads', 'staff');
+
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.dirname(uploadsDir)));
 
-const db = new Database('./qr_attendance.db');
+const db = new Database(dbPath);
 db.pragma('foreign_keys = ON');
 
 db.exec(`
@@ -43,7 +50,6 @@ db.exec(`
     photo TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
-
   CREATE TABLE IF NOT EXISTS attendance (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     staff_id TEXT NOT NULL,
@@ -147,26 +153,17 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/staff', auth, async (req, res) => {
   try {
     const staff = db.prepare(`
-      SELECT 
-        id, 
-        name, 
-        username, 
-        department, 
-        position, 
-        email, 
-        phone, 
-        role, 
-        photo,
-        created_at
+      SELECT id, name, username, department, position, email, phone, role, photo, created_at
       FROM staff 
       ORDER BY name
     `).all();
     const localIP = getLocalIP();
-    const protocol = 'http';
+    const protocol = process.env.RAILWAY_STATIC_URL ? 'https' : 'http';
+    const host = process.env.RAILWAY_STATIC_URL || `${localIP}:${PORT}`;
     const staffWithFullUrls = staff.map(member => {
       if (member.photo) {
         if (!member.photo.startsWith('http')) {
-          member.photo_url = `${protocol}://${localIP}:${PORT}${member.photo}`;
+          member.photo_url = `${protocol}://${host}${member.photo}`;
         } else {
           member.photo_url = member.photo;
         }
@@ -211,8 +208,10 @@ app.post('/api/staff/photo', auth, upload.single('photo'), async (req, res) => {
       return res.status(400).json({ error: 'No photo uploaded' });
     }
     const photoUrl = `/uploads/staff/${req.file.filename}`;
+    const protocol = process.env.RAILWAY_STATIC_URL ? 'https' : 'http';
     const localIP = getLocalIP();
-    const fullPhotoUrl = `http://${localIP}:${PORT}${photoUrl}`;
+    const host = process.env.RAILWAY_STATIC_URL || `${localIP}:${PORT}`;
+    const fullPhotoUrl = `${protocol}://${host}${photoUrl}`;
     try {
       const oldRecord = db.prepare('SELECT photo FROM staff WHERE id = ?').get(staffId);
       if (oldRecord?.photo) {
@@ -222,8 +221,7 @@ app.post('/api/staff/photo', auth, upload.single('photo'), async (req, res) => {
           fs.unlinkSync(oldPath);
         }
       }
-    } catch (deleteErr) {
-    }
+    } catch (deleteErr) {}
     const updateResult = db.prepare('UPDATE staff SET photo = ? WHERE id = ?').run(photoUrl, staffId);
     if (updateResult.changes === 0) {
       return res.status(404).json({ error: 'Staff member not found' });
@@ -515,5 +513,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n✅ Server running on:`);
   console.log(`  - Local:   http://localhost:${PORT}`);
   console.log(`  - Network: http://${localIP}:${PORT}`);
-  console.log(`  - Database: qr_attendance.db\n`);
+  console.log(`  - Database: ${dbPath}\n`);
 });
