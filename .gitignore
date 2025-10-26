@@ -1,0 +1,11 @@
+# Environment variables
+.env
+.env.local
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Uploads
+uploads/
