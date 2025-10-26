@@ -8,11 +8,11 @@ export async function initDB() {
   const config = process.env.MYSQL_URL 
     ? process.env.MYSQL_URL
     : {
-        host: process.env.MYSQL_HOST || 'localhost',
-        port: parseInt(process.env.MYSQL_PORT) || 3306,
-        user: process.env.MYSQL_USER || 'root',
-        password: process.env.MYSQL_PASSWORD || '',
-        database: process.env.MYSQL_DATABASE || 'railway',
+        host: process.env.MYSQLHOST || 'localhost',
+        port: parseInt(process.env.MYSQLPORT) || 3306,
+        user: process.env.MYSQLUSER || 'root',
+        password: process.env.MYSQLPASSWORD || '',
+        database: process.env.MYSQLDATABASE || 'railway',
         waitForConnections: true,
         connectionLimit: 10,
         queueLimit: 0
