@@ -10,5 +10,5 @@
 
 # Uploads
 uploads/
-node_/modules
-node_/modules/**/*
+node_modules
+node_modules/**/*
