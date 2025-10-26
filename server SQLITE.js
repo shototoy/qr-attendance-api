@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { initDB, getDB } from './db.js';
+import Database from 'better-sqlite3';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import os from 'os';
@@ -19,14 +19,59 @@ const __dirname = path.dirname(__filename);
 app.use(cors());
 app.use(express.json());
 
-await initDB();
+const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH 
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'qr_attendance.db')
+  : './qr_attendance.db';
 
-const uploadsDir = path.join(__dirname, 'uploads', 'staff');
+const uploadsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'uploads', 'staff')
+  : path.join(__dirname, 'uploads', 'staff');
+
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 app.use('/uploads', express.static(path.dirname(uploadsDir)));
+
+const db = new Database(dbPath);
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS staff (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    username TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,
+    department TEXT,
+    position TEXT,
+    email TEXT,
+    phone TEXT,
+    role TEXT DEFAULT 'staff' CHECK (role IN ('admin', 'staff')),
+    photo TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS attendance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    staff_id TEXT NOT NULL,
+    date DATE NOT NULL,
+    check_in DATETIME,
+    check_out DATETIME,
+    breaks TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (staff_id) REFERENCES staff(id),
+    UNIQUE (staff_id, date)
+  );
+`);
+
+const adminExists = db.prepare('SELECT id FROM staff WHERE username = ?').get('admin');
+if (!adminExists) {
+  const hash = await bcrypt.hash('admin123', 10);
+  db.prepare(`
+    INSERT INTO staff (id, name, username, password, role, department, position) 
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run('ADMIN001', 'Administrator', 'admin', hash, 'admin', 'Management', 'System Administrator');
+  console.log('✅ Default admin account created (username: admin, password: admin123)');
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -83,10 +128,8 @@ app.get('/health', (req, res) => {
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const db = getDB();
-    const [rows] = await db.execute('SELECT * FROM staff WHERE username = ?', [username]);
-    if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
-    const user = rows[0];
+    const user = db.prepare('SELECT * FROM staff WHERE username = ?').get(username);
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
@@ -109,12 +152,11 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/staff', auth, async (req, res) => {
   try {
-    const db = getDB();
-    const [staff] = await db.execute(`
+    const staff = db.prepare(`
       SELECT id, name, username, department, position, email, phone, role, photo, created_at
       FROM staff 
       ORDER BY name
-    `);
+    `).all();
     const localIP = getLocalIP();
     const protocol = process.env.RAILWAY_STATIC_URL ? 'https' : 'http';
     const host = process.env.RAILWAY_STATIC_URL || `${localIP}:${PORT}`;
@@ -139,15 +181,13 @@ app.post('/api/staff', auth, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
     const { id, name, username, password, department, position, email, phone } = req.body;
     const hash = await bcrypt.hash(password, 10);
-    const db = getDB();
-    await db.execute(
-      'INSERT INTO staff (id, name, username, password, department, position, email, phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, name, username, hash, department, position, email, phone]
-    );
+    db.prepare(
+      'INSERT INTO staff (id, name, username, password, department, position, email, phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, name, username, hash, department, position, email, phone);
     console.log(`✓ Staff added: ${name} (${id})`);
     res.json({ success: true, message: 'Staff added successfully', staffId: id });
   } catch (e) {
-    if (e.code === 'ER_DUP_ENTRY') {
+    if (e.code === 'SQLITE_CONSTRAINT') {
       res.status(400).json({ error: 'Username or ID already exists' });
     } else {
       res.status(500).json({ error: e.message });
@@ -172,23 +212,22 @@ app.post('/api/staff/photo', auth, upload.single('photo'), async (req, res) => {
     const localIP = getLocalIP();
     const host = process.env.RAILWAY_STATIC_URL || `${localIP}:${PORT}`;
     const fullPhotoUrl = `${protocol}://${host}${photoUrl}`;
-    const db = getDB();
     try {
-      const [oldRecord] = await db.execute('SELECT photo FROM staff WHERE id = ?', [staffId]);
-      if (oldRecord.length > 0 && oldRecord[0].photo) {
-        const oldFilename = path.basename(oldRecord[0].photo);
+      const oldRecord = db.prepare('SELECT photo FROM staff WHERE id = ?').get(staffId);
+      if (oldRecord?.photo) {
+        const oldFilename = path.basename(oldRecord.photo);
         const oldPath = path.join(uploadsDir, oldFilename);
         if (fs.existsSync(oldPath)) {
           fs.unlinkSync(oldPath);
         }
       }
     } catch (deleteErr) {}
-    const [updateResult] = await db.execute('UPDATE staff SET photo = ? WHERE id = ?', [photoUrl, staffId]);
-    if (updateResult.affectedRows === 0) {
+    const updateResult = db.prepare('UPDATE staff SET photo = ? WHERE id = ?').run(photoUrl, staffId);
+    if (updateResult.changes === 0) {
       return res.status(404).json({ error: 'Staff member not found' });
     }
-    const [staff] = await db.execute('SELECT name FROM staff WHERE id = ?', [staffId]);
-    console.log(`✓ Photo uploaded: ${staff[0]?.name || staffId}`);
+    const staff = db.prepare('SELECT name FROM staff WHERE id = ?').get(staffId);
+    console.log(`✓ Photo uploaded: ${staff?.name || staffId}`);
     res.json({ 
       success: true, 
       photoUrl,
@@ -218,28 +257,27 @@ app.delete('/api/staff/:staffId/photo', auth, async (req, res) => {
     if (!staffId) {
       return res.status(400).json({ error: 'Staff ID required' });
     }
-    const db = getDB();
-    const [staffRecord] = await db.execute('SELECT photo FROM staff WHERE id = ?', [staffId]);
-    if (staffRecord.length === 0) {
+    const staffRecord = db.prepare('SELECT photo FROM staff WHERE id = ?').get(staffId);
+    if (!staffRecord) {
       return res.status(404).json({ error: 'Staff member not found' });
     }
-    if (staffRecord[0].photo) {
-      const filename = path.basename(staffRecord[0].photo);
+    if (staffRecord.photo) {
+      const filename = path.basename(staffRecord.photo);
       const filePath = path.join(uploadsDir, filename);
       if (fs.existsSync(filePath)) {
         try {
           fs.unlinkSync(filePath);
         } catch (deleteErr) {
-          console.error('✗ Error deleting file:', deleteErr);
+          console.error('Error deleting file:', deleteErr);
         }
       }
     }
-    const [updateResult] = await db.execute('UPDATE staff SET photo = NULL WHERE id = ?', [staffId]);
-    if (updateResult.affectedRows === 0) {
+    const updateResult = db.prepare('UPDATE staff SET photo = NULL WHERE id = ?').run(staffId);
+    if (updateResult.changes === 0) {
       return res.status(404).json({ error: 'Failed to update staff record' });
     }
-    const [staff] = await db.execute('SELECT name FROM staff WHERE id = ?', [staffId]);
-    console.log(`✓ Photo removed: ${staff[0]?.name || staffId}`);
+    const staff = db.prepare('SELECT name FROM staff WHERE id = ?').get(staffId);
+    console.log(`✓ Photo removed: ${staff?.name || staffId}`);
     res.json({ 
       success: true, 
       message: 'Photo removed successfully'
@@ -256,20 +294,17 @@ app.post('/api/checkin', auth, async (req, res) => {
   try {
     const { staffId } = req.body;
     const today = new Date().toISOString().split('T')[0];
-    const db = getDB();
-    const [existing] = await db.execute(
-      'SELECT * FROM attendance WHERE staff_id = ? AND date = ?',
-      [staffId, today]
-    );
-    if (existing.length > 0) {
+    const existing = db.prepare(
+      'SELECT * FROM attendance WHERE staff_id = ? AND date = ?'
+    ).get(staffId, today);
+    if (existing) {
       return res.status(400).json({ error: 'Already checked in today' });
     }
-    await db.execute(
-      'INSERT INTO attendance (staff_id, date, check_in) VALUES (?, ?, NOW())',
-      [staffId, today]
-    );
-    const [staff] = await db.execute('SELECT name FROM staff WHERE id = ?', [staffId]);
-    console.log(`✓ Check-in: ${staff[0]?.name || staffId}`);
+    db.prepare(
+      "INSERT INTO attendance (staff_id, date, check_in) VALUES (?, ?, datetime('now', 'localtime'))"
+    ).run(staffId, today);
+    const staff = db.prepare('SELECT name FROM staff WHERE id = ?').get(staffId);
+    console.log(`✓ Check-in: ${staff?.name || staffId}`);
     res.json({ success: true, message: 'Check-in successful' });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -282,20 +317,17 @@ app.post('/api/checkout', auth, async (req, res) => {
     if (!staffId) {
       return res.status(400).json({ success: false, error: 'Staff ID is required' });
     }
-    const db = getDB();
-    const [records] = await db.execute(
-      'SELECT * FROM attendance WHERE staff_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1',
-      [staffId]
-    );
-    if (records.length === 0) {
+    const record = db.prepare(
+      'SELECT * FROM attendance WHERE staff_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1'
+    ).get(staffId);
+    if (!record) {
       return res.status(400).json({ success: false, error: 'No active check-in found' });
     }
-    const record = records[0];
     let breaks = [];
     let breaksAutoEnded = false;
     if (record.breaks) {
       try {
-        breaks = typeof record.breaks === 'string' ? JSON.parse(record.breaks) : record.breaks;
+        breaks = JSON.parse(record.breaks);
         if (!Array.isArray(breaks)) breaks = [];
       } catch (e) {
         breaks = [];
@@ -308,12 +340,11 @@ app.post('/api/checkout', auth, async (req, res) => {
       }
       return brk;
     });
-    await db.execute(
-      'UPDATE attendance SET check_out = NOW(), breaks = ? WHERE id = ?',
-      [JSON.stringify(breaks), record.id]
-    );
-    const [staff] = await db.execute('SELECT name FROM staff WHERE id = ?', [staffId]);
-    const staffName = staff[0]?.name || staffId;
+    db.prepare(
+      "UPDATE attendance SET check_out = datetime('now', 'localtime'), breaks = ? WHERE id = ?"
+    ).run(JSON.stringify(breaks), record.id);
+    const staff = db.prepare('SELECT name FROM staff WHERE id = ?').get(staffId);
+    const staffName = staff?.name || staffId;
     console.log(`✓ Check-out: ${staffName}${breaksAutoEnded ? ' (break auto-ended)' : ''}`);
     res.json({ 
       success: true, 
@@ -321,7 +352,7 @@ app.post('/api/checkout', auth, async (req, res) => {
       breaks_auto_ended: breaksAutoEnded
     });
   } catch (e) {
-    console.error('✗ Checkout error:', e);
+    console.error('Checkout error:', e);
     res.status(500).json({ success: false, error: 'Server error during checkout', details: e.message });
   }
 });
@@ -335,19 +366,16 @@ app.post('/api/attendance/break/start', auth, async (req, res) => {
     if (!staffId) {
       return res.status(400).json({ success: false, error: 'Staff ID is required' });
     }
-    const db = getDB();
-    const [records] = await db.execute(
-      'SELECT * FROM attendance WHERE staff_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1',
-      [staffId]
-    );
-    if (records.length === 0) {
+    const record = db.prepare(
+      'SELECT * FROM attendance WHERE staff_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1'
+    ).get(staffId);
+    if (!record) {
       return res.status(400).json({ success: false, error: 'No active shift found. Please check in first.' });
     }
-    const record = records[0];
     let breaks = [];
     if (record.breaks) {
       try {
-        breaks = typeof record.breaks === 'string' ? JSON.parse(record.breaks) : record.breaks;
+        breaks = JSON.parse(record.breaks);
         if (!Array.isArray(breaks)) breaks = [];
       } catch (e) {
         breaks = [];
@@ -359,12 +387,12 @@ app.post('/api/attendance/break/start', auth, async (req, res) => {
     }
     const now = new Date().toISOString();
     breaks.push({ start: now });
-    await db.execute('UPDATE attendance SET breaks = ? WHERE id = ?', [JSON.stringify(breaks), record.id]);
-    const [staff] = await db.execute('SELECT name FROM staff WHERE id = ?', [staffId]);
-    console.log(`✓ Break started: ${staff[0]?.name || staffId}`);
-    res.json({ success: true, message: `${staff[0]?.name || 'Staff'} started break`, break_start: now });
+    db.prepare('UPDATE attendance SET breaks = ? WHERE id = ?').run(JSON.stringify(breaks), record.id);
+    const staff = db.prepare('SELECT name FROM staff WHERE id = ?').get(staffId);
+    console.log(`✓ Break started: ${staff?.name || staffId}`);
+    res.json({ success: true, message: `${staff?.name || 'Staff'} started break`, break_start: now });
   } catch (e) {
-    console.error('✗ Start break error:', e);
+    console.error('Start break error:', e);
     res.status(500).json({ success: false, error: 'Server error while starting break', details: e.message });
   }
 });
@@ -378,19 +406,16 @@ app.post('/api/attendance/break/end', auth, async (req, res) => {
     if (!staffId) {
       return res.status(400).json({ success: false, error: 'Staff ID is required' });
     }
-    const db = getDB();
-    const [records] = await db.execute(
-      'SELECT * FROM attendance WHERE staff_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1',
-      [staffId]
-    );
-    if (records.length === 0) {
+    const record = db.prepare(
+      'SELECT * FROM attendance WHERE staff_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1'
+    ).get(staffId);
+    if (!record) {
       return res.status(400).json({ success: false, error: 'No active shift found' });
     }
-    const record = records[0];
     let breaks = [];
     if (record.breaks) {
       try {
-        breaks = typeof record.breaks === 'string' ? JSON.parse(record.breaks) : record.breaks;
+        breaks = JSON.parse(record.breaks);
         if (!Array.isArray(breaks)) breaks = [];
       } catch (e) {
         breaks = [];
@@ -402,20 +427,20 @@ app.post('/api/attendance/break/end', auth, async (req, res) => {
     }
     const now = new Date().toISOString();
     breaks[activeBreakIndex].end = now;
-    await db.execute('UPDATE attendance SET breaks = ? WHERE id = ?', [JSON.stringify(breaks), record.id]);
-    const [staff] = await db.execute('SELECT name FROM staff WHERE id = ?', [staffId]);
+    db.prepare('UPDATE attendance SET breaks = ? WHERE id = ?').run(JSON.stringify(breaks), record.id);
+    const staff = db.prepare('SELECT name FROM staff WHERE id = ?').get(staffId);
     const breakStart = new Date(breaks[activeBreakIndex].start);
     const breakEnd = new Date(now);
     const breakMinutes = Math.floor((breakEnd - breakStart) / (1000 * 60));
-    console.log(`✓ Break ended: ${staff[0]?.name || staffId} (${breakMinutes} min)`);
+    console.log(`✓ Break ended: ${staff?.name || staffId} (${breakMinutes} min)`);
     res.json({ 
       success: true, 
-      message: `${staff[0]?.name || 'Staff'} ended break (${breakMinutes} minutes)`,
+      message: `${staff?.name || 'Staff'} ended break (${breakMinutes} minutes)`,
       break_end: now,
       break_duration_minutes: breakMinutes
     });
   } catch (e) {
-    console.error('✗ End break error:', e);
+    console.error('End break error:', e);
     res.status(500).json({ success: false, error: 'Server error while ending break', details: e.message });
   }
 });
@@ -423,14 +448,13 @@ app.post('/api/attendance/break/end', auth, async (req, res) => {
 app.get('/api/attendance/today', auth, async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
-    const db = getDB();
-    const [records] = await db.execute(`
+    const records = db.prepare(`
       SELECT a.*, s.name as staff_name, s.department 
       FROM attendance a 
       JOIN staff s ON a.staff_id = s.id 
       WHERE a.date = ? 
       ORDER BY a.check_in DESC
-    `, [today]);
+    `).all(today);
     res.json(records);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -440,7 +464,6 @@ app.get('/api/attendance/today', auth, async (req, res) => {
 app.get('/api/attendance/history', auth, async (req, res) => {
   try {
     const { staffId } = req.query;
-    const db = getDB();
     let query = `
       SELECT a.*, s.name as staff_name, s.department 
       FROM attendance a 
@@ -452,7 +475,7 @@ app.get('/api/attendance/history', auth, async (req, res) => {
       params.push(staffId);
     }
     query += ' ORDER BY a.date DESC, a.check_in DESC LIMIT 100';
-    const [records] = await db.execute(query, params);
+    const records = db.prepare(query).all(...params);
     res.json(records);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -462,12 +485,11 @@ app.get('/api/attendance/history', auth, async (req, res) => {
 app.get('/api/staff/:id/photo-base64', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    const db = getDB();
-    const [staff] = await db.execute('SELECT photo FROM staff WHERE id = ?', [id]);
-    if (staff.length === 0 || !staff[0]?.photo) {
+    const staff = db.prepare('SELECT photo FROM staff WHERE id = ?').get(id);
+    if (!staff?.photo) {
       return res.status(404).json({ error: 'No photo found' });
     }
-    const photoPath = path.join(__dirname, staff[0].photo);
+    const photoPath = path.join(__dirname, staff.photo);
     if (!fs.existsSync(photoPath)) {
       return res.status(404).json({ error: 'Photo file not found' });
     }
@@ -488,7 +510,8 @@ app.get('/api/staff/:id/photo-base64', auth, async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   const localIP = getLocalIP();
-  console.log('✓ Server running');
-  console.log(`  Local:   http://localhost:${PORT}`);
-  console.log(`  Network: http://${localIP}:${PORT}`);
+  console.log(`\n✅ Server running on:`);
+  console.log(`  - Local:   http://localhost:${PORT}`);
+  console.log(`  - Network: http://${localIP}:${PORT}`);
+  console.log(`  - Database: ${dbPath}\n`);
 });

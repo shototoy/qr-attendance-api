@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { initDB, closeDB } from './db.js';
 import bcrypt from 'bcrypt';
 import fs from 'fs';
 import path from 'path';
@@ -7,96 +7,68 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-console.log('🔧 Setting up database...\n');
+console.log('Setting up database...');
 
-const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH 
-  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'qr_attendance.db')
-  : './qr_attendance.db';
-
-const uploadsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
-  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'uploads', 'staff')
-  : path.join(__dirname, 'uploads', 'staff');
-
-console.log(`📁 Database path: ${dbPath}`);
-console.log(`📁 Uploads path: ${uploadsDir}`);
-
+const uploadsDir = path.join(__dirname, 'uploads', 'staff');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('✅ Created uploads directory');
+  console.log('✓ Created uploads directory');
 }
 
-const db = new Database(dbPath);
-db.pragma('foreign_keys = ON');
+const db = await initDB();
 
-db.exec(`
+await db.execute(`
   CREATE TABLE IF NOT EXISTS staff (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    username TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    department TEXT,
-    position TEXT,
-    email TEXT,
-    phone TEXT,
-    role TEXT DEFAULT 'staff' CHECK (role IN ('admin', 'staff')),
+    id VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    username VARCHAR(100) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    department VARCHAR(100),
+    position VARCHAR(100),
+    email VARCHAR(255),
+    phone VARCHAR(50),
+    role ENUM('admin', 'staff') DEFAULT 'staff',
     photo TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_username (username)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+`);
+
+await db.execute(`
   CREATE TABLE IF NOT EXISTS attendance (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    staff_id TEXT NOT NULL,
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    staff_id VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
     check_in DATETIME,
     check_out DATETIME,
-    breaks TEXT DEFAULT '[]',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (staff_id) REFERENCES staff(id),
-    UNIQUE (staff_id, date)
-  );
-  CREATE INDEX IF NOT EXISTS idx_attendance_staff_date 
-  ON attendance(staff_id, date);
-  CREATE INDEX IF NOT EXISTS idx_attendance_check_in 
-  ON attendance(check_in);
-  CREATE INDEX IF NOT EXISTS idx_staff_username 
-  ON staff(username);
+    breaks JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (staff_id) REFERENCES staff(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_staff_date (staff_id, date),
+    INDEX idx_staff_date (staff_id, date),
+    INDEX idx_check_in (check_in)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 `);
 
-console.log('✅ Tables and indexes created successfully');
+console.log('✓ Tables created successfully');
 
-console.log('🔄 Migrating existing data...');
-const updated = db.prepare(`
-  UPDATE attendance 
-  SET breaks = '[]' 
-  WHERE breaks IS NULL OR breaks = ''
-`).run();
-console.log(`✅ Migrated ${updated.changes} attendance records with empty breaks`);
-
-const adminExists = db.prepare('SELECT id FROM staff WHERE username = ?').get('admin');
-
-if (!adminExists) {
+const [adminRows] = await db.execute('SELECT id FROM staff WHERE username = ?', ['admin']);
+if (adminRows.length === 0) {
   const hash = await bcrypt.hash('admin123', 10);
-  db.prepare(`
-    INSERT INTO staff (id, name, username, password, role, department, position) 
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run('ADMIN001', 'Administrator', 'admin', hash, 'admin', 'Management', 'System Administrator');
-  console.log('✅ Default admin account created');
-  console.log('   Username: admin');
-  console.log('   Password: admin123\n');
+  await db.execute(
+    'INSERT INTO staff (id, name, username, password, role, department, position) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ['ADMIN001', 'Administrator', 'admin', hash, 'admin', 'Management', 'System Administrator']
+  );
+  console.log('✓ Default admin created (username: admin, password: admin123)');
 } else {
-  console.log('ℹ️  Admin account already exists\n');
+  console.log('✓ Admin account exists');
 }
 
-const staffCount = db.prepare('SELECT COUNT(*) as count FROM staff').get();
-const attendanceCount = db.prepare('SELECT COUNT(*) as count FROM attendance').get();
-const attendanceWithBreaks = db.prepare(`
-  SELECT COUNT(*) as count FROM attendance 
-  WHERE breaks IS NOT NULL AND breaks != '[]'
-`).get();
+const [staffCount] = await db.execute('SELECT COUNT(*) as count FROM staff');
+const [attendanceCount] = await db.execute('SELECT COUNT(*) as count FROM attendance');
 
-console.log('📊 Database Summary:');
-console.log(`   Staff records: ${staffCount.count}`);
-console.log(`   Attendance records: ${attendanceCount.count}`);
-console.log(`   Records with breaks: ${attendanceWithBreaks.count}`);
-console.log('\n✅ Database ready: qr_attendance.db');
+console.log(`✓ Staff records: ${staffCount[0].count}`);
+console.log(`✓ Attendance records: ${attendanceCount[0].count}`);
+console.log('✓ Database ready');
 
-db.close();
+await closeDB();
