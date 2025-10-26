@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "setup": "node generate_db.js",
+    "setup": "node setup-db.js",
     "start": "node server.js"
   },
   "dependencies": {
