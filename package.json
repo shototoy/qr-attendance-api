@@ -4,8 +4,7 @@
   "type": "module",
   "scripts": {
     "setup": "node setup-db.js",
-    "start": "node server.js",
-    "install": "npm install --prefer-offline --no-audit --progress=false"
+    "start": "node server.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
@@ -16,7 +15,7 @@
     "multer": "2.0.2"
   },
   "engines": {
-    "node": "18.x",
+    "node": "22.x",
     "npm": "10.x"
   }
 }

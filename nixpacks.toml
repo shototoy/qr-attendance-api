@@ -2,7 +2,7 @@
 nixPkgs = ["nodejs_22", "python3", "gcc", "gnumake"]
 
 [phases.install]
-cmds = ["npm ci"]
+cmds = ["npm install --production=false"]
 
 [start]
 cmd = "npm start"
