@@ -5,16 +5,18 @@ let pool;
 export async function initDB() {
   if (pool) return pool;
 
-  const config = {
-    host: process.env.MYSQL_HOST || 'localhost',
-    port: process.env.MYSQL_PORT || 3306,
-    user: process.env.MYSQL_USER || 'root',
-    password: process.env.MYSQL_PASSWORD || '',
-    database: process.env.MYSQL_DATABASE || 'qr_attendance',
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-  };
+  const config = process.env.MYSQL_URL 
+    ? process.env.MYSQL_URL
+    : {
+        host: process.env.MYSQL_HOST || 'mysql.railway.internal',
+        port: process.env.MYSQL_PORT || 3306,
+        user: process.env.MYSQL_USER || 'root',
+        password: process.env.MYSQL_PASSWORD || 'DmMOKpgFpqHJmcHHQdVZqysauVktzCmB',
+        database: process.env.MYSQL_DATABASE || 'railway',
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0
+      };
 
   pool = mysql.createPool(config);
   
