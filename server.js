@@ -21,12 +21,24 @@ app.use(express.json());
 
 await initDB();
 
-const uploadsDir = path.join(__dirname, 'uploads', 'staff');
+const uploadsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH 
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'staff')
+  : path.join(__dirname, 'uploads', 'staff');
+
+const assetsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'assets')
+  : path.join(__dirname, 'assets');
+
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+if (!fs.existsSync(assetsDir)) {
+  fs.mkdirSync(assetsDir, { recursive: true });
+}
+
 app.use('/uploads', express.static(path.dirname(uploadsDir)));
+app.use('/assets', express.static(assetsDir));
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -467,7 +479,10 @@ app.get('/api/staff/:id/photo-base64', auth, async (req, res) => {
     if (staff.length === 0 || !staff[0]?.photo) {
       return res.status(404).json({ error: 'No photo found' });
     }
-    const photoPath = path.join(__dirname, staff[0].photo);
+    const photoPath = staff[0].photo.startsWith('/') 
+      ? path.join(path.dirname(uploadsDir), staff[0].photo.replace('/uploads/', ''))
+      : path.join(__dirname, staff[0].photo);
+    
     if (!fs.existsSync(photoPath)) {
       return res.status(404).json({ error: 'Photo file not found' });
     }
@@ -480,6 +495,31 @@ app.get('/api/staff/:id/photo-base64', auth, async (req, res) => {
       success: true,
       data: dataUri,
       staffId: id
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/logo/:filename', auth, async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const logoPath = path.join(assetsDir, filename);
+    
+    if (!fs.existsSync(logoPath)) {
+      return res.status(404).json({ error: 'Logo file not found' });
+    }
+    
+    const imageBuffer = fs.readFileSync(logoPath);
+    const base64 = imageBuffer.toString('base64');
+    const ext = path.extname(logoPath).toLowerCase();
+    const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+    const dataUri = `data:${mimeType};base64,${base64}`;
+    
+    res.json({ 
+      success: true,
+      data: dataUri,
+      filename: filename
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
