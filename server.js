@@ -12,7 +12,6 @@ import fs from 'fs';
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET || 'qr-attendance-secret-2024';
 const PORT = process.env.PORT || 3000;
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -24,39 +23,33 @@ await initDB();
 const uploadsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH 
   ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'staff')
   : path.join(__dirname, 'uploads', 'staff');
-
-const assetsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
-  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'uploads')
+const baseUploadsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+  ? process.env.RAILWAY_VOLUME_MOUNT_PATH
   : path.join(__dirname, 'uploads');
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
-
-if (!fs.existsSync(assetsDir)) {
-  fs.mkdirSync(assetsDir, { recursive: true });
+if (!fs.existsSync(baseUploadsDir)) {
+  fs.mkdirSync(baseUploadsDir, { recursive: true });
 }
 
 const copyLogoToVolume = () => {
-  if (process.env.RAILWAY_VOLUME_MOUNT_PATH) {
-    const repoLogoPath = path.join(__dirname, 'uploads', 'logo.png');
-    const volumeLogoPath = path.join(assetsDir, 'logo.png');
-    
-    if (fs.existsSync(repoLogoPath) && !fs.existsSync(volumeLogoPath)) {
-      try {
-        fs.copyFileSync(repoLogoPath, volumeLogoPath);
-        console.log('✓ Logo copied to volume');
-      } catch (error) {
-        console.error('✗ Failed to copy logo:', error);
-      }
+  const repoLogoPath = path.join(__dirname, 'assets', 'logo.png');
+  const volumeLogoPath = path.join(baseUploadsDir, 'logo.png');
+  if (fs.existsSync(repoLogoPath) && !fs.existsSync(volumeLogoPath)) {
+    try {
+      fs.copyFileSync(repoLogoPath, volumeLogoPath);
+      console.log('✓ Logo copied to volume');
+    } catch (error) {
+      console.error('✗ Failed to copy logo:', error);
     }
   }
 };
 
 copyLogoToVolume();
 
-app.use('/uploads', express.static(path.dirname(uploadsDir)));
-app.use('/uploads', express.static(assetsDir));
+app.use('/uploads', express.static(baseUploadsDir));
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -500,7 +493,6 @@ app.get('/api/staff/:id/photo-base64', auth, async (req, res) => {
     const photoPath = staff[0].photo.startsWith('/') 
       ? path.join(path.dirname(uploadsDir), staff[0].photo.replace('/uploads/', ''))
       : path.join(__dirname, staff[0].photo);
-    
     if (!fs.existsSync(photoPath)) {
       return res.status(404).json({ error: 'Photo file not found' });
     }
@@ -521,18 +513,15 @@ app.get('/api/staff/:id/photo-base64', auth, async (req, res) => {
 
 app.get('/api/logo/base64', async (req, res) => {
   try {
-    const logoPath = path.join(assetsDir, 'logo.png');
-    
+    const logoPath = path.join(baseUploadsDir, 'logo.png');
     if (!fs.existsSync(logoPath)) {
       return res.status(404).json({ error: 'Logo file not found' });
     }
-    
     const imageBuffer = fs.readFileSync(logoPath);
     const base64 = imageBuffer.toString('base64');
     const ext = path.extname(logoPath).toLowerCase();
     const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
     const dataUri = `data:${mimeType};base64,${base64}`;
-    
     res.json({ 
       success: true,
       data: dataUri
