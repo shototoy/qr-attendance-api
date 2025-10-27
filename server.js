@@ -37,6 +37,24 @@ if (!fs.existsSync(assetsDir)) {
   fs.mkdirSync(assetsDir, { recursive: true });
 }
 
+const copyLogoToVolume = () => {
+  if (process.env.RAILWAY_VOLUME_MOUNT_PATH) {
+    const repoLogoPath = path.join(__dirname, 'assets', 'logo.png');
+    const volumeLogoPath = path.join(assetsDir, 'logo.png');
+    
+    if (fs.existsSync(repoLogoPath) && !fs.existsSync(volumeLogoPath)) {
+      try {
+        fs.copyFileSync(repoLogoPath, volumeLogoPath);
+        console.log('✓ Logo copied to volume');
+      } catch (error) {
+        console.error('✗ Failed to copy logo:', error);
+      }
+    }
+  }
+};
+
+copyLogoToVolume();
+
 app.use('/uploads', express.static(path.dirname(uploadsDir)));
 app.use('/assets', express.static(assetsDir));
 
@@ -501,10 +519,9 @@ app.get('/api/staff/:id/photo-base64', auth, async (req, res) => {
   }
 });
 
-app.get('/api/logo/:filename', auth, async (req, res) => {
+app.get('/api/logo/base64', async (req, res) => {
   try {
-    const { filename } = req.params;
-    const logoPath = path.join(assetsDir, filename);
+    const logoPath = path.join(assetsDir, 'logo.png');
     
     if (!fs.existsSync(logoPath)) {
       return res.status(404).json({ error: 'Logo file not found' });
@@ -518,8 +535,7 @@ app.get('/api/logo/:filename', auth, async (req, res) => {
     
     res.json({ 
       success: true,
-      data: dataUri,
-      filename: filename
+      data: dataUri
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
