@@ -26,8 +26,8 @@ const uploadsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
   : path.join(__dirname, 'uploads', 'staff');
 
 const assetsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
-  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'assets')
-  : path.join(__dirname, 'assets');
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'uploads')
+  : path.join(__dirname, 'uploads');
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -39,7 +39,7 @@ if (!fs.existsSync(assetsDir)) {
 
 const copyLogoToVolume = () => {
   if (process.env.RAILWAY_VOLUME_MOUNT_PATH) {
-    const repoLogoPath = path.join(__dirname, 'assets', 'logo.png');
+    const repoLogoPath = path.join(__dirname, 'uploads', 'logo.png');
     const volumeLogoPath = path.join(assetsDir, 'logo.png');
     
     if (fs.existsSync(repoLogoPath) && !fs.existsSync(volumeLogoPath)) {
@@ -56,7 +56,7 @@ const copyLogoToVolume = () => {
 copyLogoToVolume();
 
 app.use('/uploads', express.static(path.dirname(uploadsDir)));
-app.use('/assets', express.static(assetsDir));
+app.use('/uploads', express.static(assetsDir));
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
