@@ -670,29 +670,6 @@ app.get('/api/logo/base64', async (req, res) => {
   }
 });
 
-app.get('/api/admin/one-time-reset/:secret', async (req, res) => {
-  try {
-    if (req.params.secret !== 'your-secret-key-12345') {
-      return res.status(403).json({ error: 'Invalid secret' });
-    }
-    const hash = await bcrypt.hash('sam123', 10);
-    const db = getDB();
-    const [result] = await db.execute(
-      'UPDATE staff SET password = ? WHERE username = ?',
-      [hash, 'samsam']
-    );
-    console.log('✓ One-time password reset completed for sam');
-    res.json({ 
-      success: true, 
-      message: 'Password reset to sam123',
-      rowsAffected: result.affectedRows 
-    });
-  } catch (e) {
-    console.error('✗ Reset error:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
 app.listen(PORT, '0.0.0.0', () => {
   const localIP = getLocalIP();
   console.log('\n🎉 QR Attendance System Ready');
