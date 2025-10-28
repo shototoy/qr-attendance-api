@@ -399,13 +399,15 @@ app.post('/api/checkin', auth, async (req, res) => {
       console.log(`✗ Duplicate check-in attempt: ${staffId} - Already checked in today`);
       return res.status(400).json({ error: 'Already checked in today' });
     }
+    const [maxIdResult] = await db.execute('SELECT COALESCE(MAX(id), 0) + 1 as next_id FROM attendance');
+    const nextId = maxIdResult[0].next_id;
     await db.execute(
-      'INSERT INTO attendance (staff_id, date, check_in) VALUES (?, ?, NOW())',
-      [staffId, today]
+      'INSERT INTO attendance (id, staff_id, date, check_in) VALUES (?, ?, ?, NOW())',
+      [nextId, staffId, today]
     );
     const [staff] = await db.execute('SELECT name FROM staff WHERE id = ?', [staffId]);
     const now = new Date().toLocaleTimeString('en-US', { hour12: false });
-    console.log(`✓ Check-in: ${staff[0]?.name || staffId} at ${now}`);
+    console.log(`✓ Check-in: ${staff[0]?.name || staffId} at ${now} [ID: ${nextId}]`);
     res.json({ success: true, message: 'Check-in successful' });
   } catch (e) {
     console.error('✗ Check-in error:', e.message);
